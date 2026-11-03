@@ -1,7 +1,8 @@
 import AppKit
 import Carbon.HIToolbox
+import ServiceManagement
 
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private enum Key {
         static let enabled = "enabled"
         static let size = "size"
@@ -17,6 +18,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem!
     private var hotKey: EventHotKeyRef?
     private var toggleSignal: DispatchSourceSignal?
+    private var loginMenuItem: NSMenuItem?
     private var locked = false
 
     private var enabled: Bool {
@@ -98,6 +100,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         sizeItem.submenu = sizeMenu
         menu.addItem(sizeItem)
 
+        let login = flag("Start at Login", #selector(toggleLogin), LoginItem.isOn)
+        loginMenuItem = login
+        menu.addItem(login)
+
         menu.addItem(.separator())
         menu.addItem(flag("Fade While Typing", #selector(toggleFade), defaults.bool(forKey: Key.fadeTyping)))
         menu.addItem(flag("Hide When Idle in Full Screen", #selector(toggleFullscreen), defaults.bool(forKey: Key.hideFullscreen)))
@@ -114,7 +120,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let quit = NSMenuItem(title: "Quit Kiko Cursor", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         menu.addItem(quit)
 
+        menu.delegate = self
         statusItem.menu = menu
+    }
+
+    /// The login item can be switched off in System Settings, so check each time the menu opens.
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        loginMenuItem?.state = LoginItem.isOn ? .on : .off
     }
 
     private func flag(_ title: String, _ action: Selector, _ on: Bool) -> NSMenuItem {
@@ -127,6 +139,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func pickSize(_ sender: NSMenuItem) {
         defaults.set(sender.title, forKey: Key.size)
         overlay.scale = Self.sizes.first { $0.name == sender.title }?.scale ?? 0.85
+        rebuildMenu()
+    }
+
+    @objc private func toggleLogin() {
+        do {
+            try LoginItem.set(!LoginItem.isOn)
+        } catch {
+            NSApp.activate(ignoringOtherApps: true)
+            let alert = NSAlert()
+            alert.messageText = "Kiko couldn't change Start at Login"
+            alert.informativeText = error.localizedDescription
+            alert.runModal()
+        }
+        if LoginItem.needsApproval {
+            SMAppService.openSystemSettingsLoginItems()
+        }
         rebuildMenu()
     }
 

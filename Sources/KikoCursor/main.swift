@@ -26,6 +26,20 @@ if args.contains("--bench") {
     exit(0)
 }
 
+// --login-item on|off|status does what the menu item does. It only works from inside the .app.
+if let i = args.firstIndex(of: "--login-item"), i + 1 < args.count {
+    do {
+        if args[i + 1] != "status" {
+            try LoginItem.set(args[i + 1] == "on")
+        }
+        print("login item: \(LoginItem.statusName)")
+        exit(0)
+    } catch {
+        print("login item: failed: \(error.localizedDescription)")
+        exit(1)
+    }
+}
+
 let app = NSApplication.shared
 app.setActivationPolicy(.accessory)
 let delegate = AppDelegate()

@@ -7,18 +7,17 @@ Turns your Mac's pointer into Kiko, an original chibi fox spirit who lives in yo
 ## Run it
 
 ```bash
-./scripts/build-app.sh
+./scripts/install.sh
 ```
 
-```bash
-open dist/KikoCursor.app
-```
+That builds the app, moves it to `/Applications` and opens it. Run it again after changing the code.
 
 Needs macOS 14 or later and Swift (the Command Line Tools are enough). It asks for no permissions: no Accessibility, no Input Monitoring, no Screen Recording.
 
-- **Menu bar paw:** show or hide Kiko, change the size and options, quit.
+- **Menu bar paw:** show or hide Kiko, change the size and options, start at login, quit.
 - **⌃⌥K:** swap back to the normal pointer from anywhere.
 - **Quitting or crashing** brings the normal pointer straight back, because macOS ties the hidden state to the process.
+- **Start at Login** remembers where the app is. If you move the app out of `/Applications`, Kiko won't start at login. Opening the app from its new location and switching the option off and on should fix that, though this hasn't been tested.
 
 ## What Kiko does
 
@@ -66,10 +65,10 @@ swift run KikoCursor --check
 Logic checks through the real physics: fingertip accuracy, every pose fits the window, screen edges, reactions, recovery from stalls.
 
 ```bash
-swiftc -O scripts/livecheck.swift -o /tmp/livecheck -framework AppKit && /tmp/livecheck "$PWD/dist/KikoCursor.app/Contents/MacOS/KikoCursor"
+swiftc -O scripts/livecheck.swift -o /tmp/livecheck -framework AppKit && pkill -x KikoCursor; /tmp/livecheck /Applications/KikoCursor.app/Contents/MacOS/KikoCursor
 ```
 
-Runs the app and checks from outside it, through the window system, that the pointer is hidden, the window tracks the mouse, toggling works, a returned pointer is re-hidden quickly, and a clean quit or `kill -9` restores the pointer. It moves your real mouse for a few seconds but never clicks.
+Quits any running Kiko, then runs the app and checks from outside it, through the window system, that the pointer is hidden, the window tracks the mouse, toggling works, a returned pointer is re-hidden quickly, and a clean quit or `kill -9` restores the pointer. It moves your real mouse for a few seconds but never clicks.
 
 ```bash
 swift run KikoCursor --sheet sheet.png
@@ -77,7 +76,7 @@ swift run KikoCursor --sheet sheet.png
 
 Renders every pose through the real physics, on light and dark, with a red cross on the hotspot. Art changes are easiest to judge here.
 
-Other developer flags: `--portrait PATH`, `--bench`, `--exit-after SECONDS`, `--dump-frame PATH`, `--print-status`, `--test-unhide-every SECONDS`. Running `pkill -USR1 KikoCursor` does the same as ⌃⌥K.
+Other developer flags: `--portrait PATH`, `--bench`, `--exit-after SECONDS`, `--dump-frame PATH`, `--print-status`, `--test-unhide-every SECONDS`, `--login-item on|off|status` (from inside the `.app` only). Running `pkill -USR1 KikoCursor` does the same as ⌃⌥K.
 
 ## Known limits
 
