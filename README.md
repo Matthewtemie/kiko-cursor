@@ -14,7 +14,7 @@ Turns your Mac's pointer into an original chibi character who lives in your menu
 
 That builds the app, moves it to `/Applications` and opens it. Run it again after changing the code.
 
-Needs macOS 14 or later and Swift (the Command Line Tools are enough). It asks for no permissions: no Accessibility, no Input Monitoring, no Screen Recording.
+The app is for macOS 13 or later, on Apple silicon and Intel, as one universal build. Build it on a Mac with up-to-date Command Line Tools (tested with Swift 6.4, no Xcode needed), then copy the app to the Mac you want it on: the tools available for macOS 13 itself are too old to build it. It asks for no permissions: no Accessibility, no Input Monitoring, no Screen Recording.
 
 - **Menu bar paw:** show or hide the character, pick who it is under **Avatar**, change the size and options, start at login, quit. Your pick is remembered.
 - **⌃⌥K:** swap back to the normal pointer from anywhere.
@@ -69,6 +69,7 @@ macOS has no public way to replace the system cursor, so the app does three thin
 | `Sources/KikoCore/DrawKit.swift` | What they share, including the pointing arm |
 | `Sources/KikoCore/Renderer.swift` | Picks the character's art for a pose and draws the real cursor when needed |
 | `Sources/KikoCursor/Overlay.swift` | The window, frame loop and drawing surface |
+| `Sources/KikoCursor/FrameClock.swift` | Frame timing: `CADisplayLink` on macOS 14 and later, `CVDisplayLink` on macOS 13 |
 | `Sources/KikoCursor/CursorHider.swift` | Hiding and restoring the real pointer |
 | `Sources/KikoCursor/SystemCursorWatcher.swift` | Working out which cursor the app wants |
 | `Sources/KikoCursor/AppDelegate.swift` | Menu bar, hot key, lock screen and sleep handling |
@@ -85,7 +86,13 @@ Checks through the real physics and drawing, for every character: fingertip accu
 swiftc -O scripts/livecheck.swift -o /tmp/livecheck -framework AppKit && pkill -x KikoCursor; /tmp/livecheck /Applications/KikoCursor.app/Contents/MacOS/KikoCursor
 ```
 
-Quits any running Kiko, then runs the app and checks from outside it, through the window system, that the pointer is hidden, the window tracks the mouse, toggling works, a returned pointer is re-hidden quickly, and a clean quit or `kill -9` restores the pointer. It moves your real mouse for a few seconds but never clicks. It won't run with the screen locked or the display asleep, because no frames are drawn then.
+Quits any running Kiko, then runs the app and checks from outside it, through the window system, that the pointer is hidden, the window tracks the mouse, toggling works, a returned pointer is re-hidden quickly, and a clean quit or `kill -9` restores the pointer. It moves your real mouse for a few seconds but never clicks. It won't run with the screen locked or the display asleep, because no frames are drawn then. Add `--test-core-video-clock` after the app's path to test macOS 13's frame clock on a newer system.
+
+```bash
+arch -x86_64 /Applications/KikoCursor.app/Contents/MacOS/KikoCursor --check
+```
+
+Runs the checks on the Intel half of the app, on an Apple silicon Mac with Rosetta installed. For the live check, copy the app, keep only its Intel half with `lipo -thin x86_64`, re-sign the copy with `codesign --force --sign -`, and give livecheck that copy's binary. Rosetta doesn't show how fast the app is on a real Intel Mac.
 
 ```bash
 swift run KikoCursor --avatar suzu --sheet sheet.png
@@ -95,11 +102,12 @@ Renders every pose through the real physics, on light and dark, with a red cross
 
 `--avatar NAME` also shows that character for one run without saving the choice. `--test-avatar-menu DIR` picks each character through the real menu, saves what's on screen to `DIR`, puts your saved choice back and quits.
 
-Other developer flags: `--portrait PATH`, `--bench`, `--exit-after SECONDS`, `--dump-frame PATH`, `--print-status`, `--test-unhide-every SECONDS`, `--login-item on|off|status` (from inside the `.app` only). Running `pkill -USR1 KikoCursor` does the same as ⌃⌥K.
+Other developer flags: `--portrait PATH`, `--bench`, `--exit-after SECONDS`, `--dump-frame PATH`, `--print-status`, `--test-unhide-every SECONDS`, `--test-core-video-clock`, `--login-item on|off|status` (from inside the `.app` only). Running `pkill -USR1 KikoCursor` does the same as ⌃⌥K.
 
 ## Known limits
 
 - **Distribution:** the private API rules out the Mac App Store. Selling it means a notarized direct download, which needs an Apple Developer ID. The current build has only an ad-hoc signature, so on other Macs Gatekeeper will block it.
+- **macOS 13 and Intel:** so far the app has only run on macOS 26 on an Apple silicon Mac. There, macOS 13's frame clock has been tested by forcing it on, and the Intel build by running it under Rosetta. It has never run on real macOS 13 or a real Intel Mac, and CPU use on Intel is unmeasured.
 - **Latency:** a window can't quite match the hardware cursor, so fast flicks may trail slightly. This hasn't been measured.
 - **Secure screens:** the app restores the normal pointer when the screen locks. Some system-level surfaces may not show the character.
 - **Multiple displays:** the code handles them, but so far it has only run on a single built-in display.

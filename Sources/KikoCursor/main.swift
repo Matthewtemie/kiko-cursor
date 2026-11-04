@@ -5,7 +5,7 @@ let args = CommandLine.arguments
 
 // Without this, a mistyped flag would start the app for real and take over the pointer.
 let knownFlags: Set<String> = ["--avatar", "--sheet", "--portrait", "--lineup", "--icon", "--check", "--bench", "--login-item",
-                               "--exit-after", "--dump-frame", "--test-unhide-every", "--test-avatar-menu", "--print-status"]
+                               "--exit-after", "--dump-frame", "--test-unhide-every", "--test-avatar-menu", "--test-core-video-clock", "--print-status"]
 if let unknown = args.dropFirst().first(where: { $0.hasPrefix("--") && !knownFlags.contains($0) }) {
     print("unknown flag \(unknown); the flags are \(knownFlags.sorted().joined(separator: " "))")
     exit(2)
@@ -85,6 +85,7 @@ let app = NSApplication.shared
 app.setActivationPolicy(.accessory)
 let delegate = AppDelegate()
 delegate.avatarForThisRun = chosenAvatar
+delegate.forceCoreVideoClock = args.contains("--test-core-video-clock")
 app.delegate = delegate
 
 // --exit-after N quits on its own, so a test run can never strand the pointer.

@@ -26,6 +26,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// From --avatar: shows this character for one run without saving the choice.
     var avatarForThisRun: Avatar?
 
+    /// From --test-core-video-clock: runs macOS 13's frame clock on a newer system.
+    var forceCoreVideoClock = false
+
     /// What the settings held before the defaults went in, which is what a test walk puts back.
     private var avatarAtLaunch: String?
     private var walkingAvatarMenu = false
@@ -46,7 +49,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             Key.capturable: false,
         ])
 
-        overlay = Overlay()
+        overlay = Overlay(forceCoreVideoClock: forceCoreVideoClock)
         overlay.avatar = avatarForThisRun ?? defaults.string(forKey: Key.avatar).flatMap(Avatar.init) ?? .kiko
         overlay.scale = Self.sizes.first { $0.name == defaults.string(forKey: Key.size) }?.scale ?? 0.85
         overlay.fadeWhileTyping = defaults.bool(forKey: Key.fadeTyping)

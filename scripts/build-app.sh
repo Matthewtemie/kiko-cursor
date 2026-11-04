@@ -1,21 +1,28 @@
 #!/bin/zsh
-# Builds dist/KikoCursor.app: release binary, icon, Info.plist, ad-hoc signature.
+# Builds dist/KikoCursor.app: universal release binary, icon, Info.plist, ad-hoc signature.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
 ROOT="$PWD"
 APP="$ROOT/dist/KikoCursor.app"
 
-swift build -c release 2>&1 | grep -E "error:|Compiling KikoCursor|Build complete" || true
-BIN="$(swift build -c release --show-bin-path)/KikoCursor"
-[[ -x "$BIN" ]] || { echo "release binary missing" >&2; exit 1; }
+WORK="$(mktemp -d)"
+trap 'rm -rf "$WORK"' EXIT
+
+# One binary for Apple silicon and Intel.
+if ! swift build -c release --arch arm64 --arch x86_64 > "$WORK/build.log" 2>&1; then
+  tail -30 "$WORK/build.log" >&2
+  echo "build failed" >&2
+  exit 1
+fi
+BIN="$(swift build -c release --arch arm64 --arch x86_64 --show-bin-path)/KikoCursor"
+ARCHS="$(lipo -archs "$BIN")"
+[[ "$ARCHS" == *arm64* && "$ARCHS" == *x86_64* ]] || { echo "not a universal binary: $ARCHS" >&2; exit 1; }
 
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/KikoCursor"
 
-WORK="$(mktemp -d)"
-trap 'rm -rf "$WORK"' EXIT
 "$BIN" --icon "$WORK/icon.png"
 mkdir "$WORK/AppIcon.iconset"
 for size in 16 32 128 256 512; do
@@ -38,7 +45,7 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
   <key>CFBundleIconFile</key><string>AppIcon</string>
   <key>CFBundleShortVersionString</key><string>0.1.0</string>
   <key>CFBundleVersion</key><string>1</string>
-  <key>LSMinimumSystemVersion</key><string>14.0</string>
+  <key>LSMinimumSystemVersion</key><string>13.0</string>
   <key>LSUIElement</key><true/>
   <key>NSHighResolutionCapable</key><true/>
 </dict>

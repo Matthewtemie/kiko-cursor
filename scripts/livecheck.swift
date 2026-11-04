@@ -1,6 +1,6 @@
 #!/usr/bin/env swift
 // Checks the running app from outside its process, by asking the window system what
-// is really on screen. Usage: livecheck <path to KikoCursor binary>
+// is really on screen. Usage: livecheck <path to KikoCursor binary> [flags for the app]
 //
 // It moves the real mouse for a few seconds (it never clicks) and puts it back.
 import AppKit
@@ -34,16 +34,17 @@ guard CommandLine.arguments.count > 1 else {
     exit(2)
 }
 
-/// On macOS 26 menu bar items are windows hosted by Control Centre, not by their own app.
+/// On macOS 26 menu bar items are windows hosted by Control Centre, not by their own app. On
+/// older systems they belong to the app, which is why this takes its process id too.
 /// This asks for all windows, because the menu bar counts as off screen in a full-screen
 /// Space. Counting these before and after launch doesn't work: the last item to quit stays
 /// listed until the next one replaces it.
-func menuBarItems() -> [CGRect] {
+func menuBarItems(orOwnedBy pid: pid_t) -> [CGRect] {
     let statusLevel = Int(CGWindowLevelForKey(.statusWindow))
     let list = CGWindowListCopyWindowInfo([.optionAll], kCGNullWindowID) as? [[String: Any]] ?? []
     return list.compactMap { w -> CGRect? in
         guard (w[kCGWindowLayer as String] as? Int) == statusLevel,
-              (w[kCGWindowOwnerName as String] as? String)?.hasPrefix("Control Cent") == true,
+              (w[kCGWindowOwnerName as String] as? String)?.hasPrefix("Control Cent") == true || (w[kCGWindowOwnerPID as String] as? pid_t) == pid,
               let b = w[kCGWindowBounds as String] as? NSDictionary,
               let rect = CGRect(dictionaryRepresentation: b), rect.width < 200
         else { return nil }
@@ -59,17 +60,21 @@ if session["CGSSessionScreenIsLocked"] as? Bool == true || CGDisplayIsAsleep(CGM
     exit(2)
 }
 
+let appFlags = Array(CommandLine.arguments.dropFirst(2))
 let start = mouse()
 let bounds = NSScreen.main!.frame
 print("displays: \(NSScreen.screens.map { "\($0.frame) scale \($0.backingScaleFactor)" })")
 
 let app = Process()
 app.executableURL = URL(fileURLWithPath: CommandLine.arguments[1])
-app.arguments = ["--exit-after", "40"]
+app.arguments = ["--exit-after", "40"] + appFlags
 try! app.run()
 let pid = app.processIdentifier
 defer { CGWarpMouseCursorPosition(start) }
-wait(1.2)
+// The first launch of a build can be slow, especially under Rosetta.
+let launched = Date()
+while overlayFrame(pid: pid) == nil, Date().timeIntervalSince(launched) < 8 { wait(0.1) }
+wait(0.3)
 
 print("launch")
 expect(app.isRunning, "app is running")
@@ -154,7 +159,7 @@ expect(overlayFrame(pid: pid) == nil, "and removes the overlay")
 print("clean quit")
 let again = Process()
 again.executableURL = URL(fileURLWithPath: CommandLine.arguments[1])
-again.arguments = ["--exit-after", "1"]
+again.arguments = ["--exit-after", "1"] + appFlags
 try! again.run()
 wait(0.7)
 expect(!cursorVisible(), "hidden while running")
@@ -166,7 +171,7 @@ expect(cursorVisible(), "pointer is back after quitting")
 print("when the system brings the pointer back")
 let forced = Process()
 forced.executableURL = URL(fileURLWithPath: CommandLine.arguments[1])
-forced.arguments = ["--exit-after", "4", "--test-unhide-every", "0.6"]
+forced.arguments = ["--exit-after", "4", "--test-unhide-every", "0.6"] + appFlags
 try! forced.run()
 wait(0.8)
 var spellStart: Date?
@@ -181,7 +186,8 @@ while Date() < spellsEnd {
         returns += 1
         spellStart = nil
     }
-    usleep(2000)
+    // With a hand on the mouse the pointer is back for only about 2 ms, so look more often than that.
+    usleep(200)
 }
 forced.waitUntilExit()
 wait(0.3)
@@ -191,12 +197,12 @@ expect(worstSpell < 0.15, "it is hidden again within 150 ms", "(worst \(Int(wors
 print("menu bar")
 let probe = Process()
 probe.executableURL = URL(fileURLWithPath: CommandLine.arguments[1])
-probe.arguments = ["--exit-after", "2.2", "--print-status"]
+probe.arguments = ["--exit-after", "2.2", "--print-status"] + appFlags
 let pipe = Pipe()
 probe.standardOutput = pipe
 try! probe.run()
 wait(1.6)
-let hosted = menuBarItems()
+let hosted = menuBarItems(orOwnedBy: probe.processIdentifier)
 probe.waitUntilExit()
 let report = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
 let numbers = report.split(whereSeparator: \.isWhitespace).compactMap { Double($0) }
@@ -206,7 +212,7 @@ if numbers.count == 4, let screen = NSScreen.main {
     let area = screen.auxiliaryTopRightArea ?? screen.frame
     expect(item.minX >= area.minX && item.maxX <= area.maxX, "item is in the visible area, clear of any notch",
            "(x \(Int(item.minX))-\(Int(item.maxX)), visible from x \(Int(area.minX)))")
-    expect(hosted.contains { abs($0.minX - item.minX) < 3 && abs($0.width - item.width) < 3 }, "Control Centre has a window there for it")
+    expect(hosted.contains { abs($0.minX - item.minX) < 3 && abs($0.width - item.width) < 3 }, "the menu bar has a window there for it")
 } else {
     expect(false, "app reported its menu bar item", "(got: \(report))")
 }

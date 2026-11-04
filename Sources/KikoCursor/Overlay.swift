@@ -54,9 +54,6 @@ private final class Canvas {
 /// The click-through window that follows the mouse with Kiko in it. The hotspot stays
 /// at the centre of the window, so the fingertip is exact whatever the drawing is doing.
 final class Overlay: NSObject {
-    private static let livelyRate = CAFrameRateRange(minimum: 60, maximum: 120, preferred: 120)
-    private static let idleRate = CAFrameRateRange(minimum: 24, maximum: 30, preferred: 30)
-
     private let window: OverlayWindow
     private let host = NSView()
     private let canvas = Canvas()
@@ -64,7 +61,7 @@ final class Overlay: NSObject {
     private let watcher = SystemCursorWatcher()
     let hider = CursorHider()
 
-    private var link: CADisplayLink?
+    private var clock: FrameClock?
     private var monitors: [Any] = []
     private var lastTick: CFTimeInterval = 0
     private var lastDraw: CFTimeInterval = 0
@@ -99,7 +96,7 @@ final class Overlay: NSObject {
         didSet { window.sharingType = capturable ? .readOnly : .none }
     }
 
-    override init() {
+    init(forceCoreVideoClock: Bool = false) {
         window = OverlayWindow(contentRect: NSRect(x: 0, y: 0, width: 200, height: 200),
                                styleMask: .borderless, backing: .buffered, defer: false)
         super.init()
@@ -120,11 +117,11 @@ final class Overlay: NSObject {
         window.contentView = host
         applyScale()
 
-        let displayLink = host.displayLink(target: self, selector: #selector(tick(_:)))
-        displayLink.preferredFrameRateRange = Overlay.idleRate
-        displayLink.add(to: .main, forMode: .common)
-        displayLink.isPaused = true
-        link = displayLink
+        clock = makeFrameClock(for: host, forceCoreVideo: forceCoreVideoClock) { [weak self] now in
+            self?.tick(now: now)
+        }
+        NotificationCenter.default.addObserver(self, selector: #selector(backingChanged),
+                                               name: NSWindow.didChangeBackingPropertiesNotification, object: window)
     }
 
     func setActive(_ on: Bool) {
@@ -136,9 +133,9 @@ final class Overlay: NSObject {
             window.orderFrontRegardless()
             addMonitors()
             lastTick = 0
-            link?.isPaused = false
+            clock?.isPaused = false
         } else {
-            link?.isPaused = true
+            clock?.isPaused = true
             removeMonitors()
             window.orderOut(nil)
         }
@@ -147,7 +144,10 @@ final class Overlay: NSObject {
     /// After sleep, a display change or anything else that might have reset the pointer.
     func reassert() {
         hider.apply()
+        // Also moves the clock off a display that may have just gone away, which it can't do from
+        // a frame, because a clock on a missing display has no frames.
         currentScreen = nil
+        _ = screenUnder(NSEvent.mouseLocation)
         syncPixelScale()
         if active {
             window.orderFrontRegardless()
@@ -179,6 +179,11 @@ final class Overlay: NSObject {
         if window.backingScaleFactor != pixelScale || window.colorSpace?.cgColorSpace != colorSpace {
             applyScale()
         }
+    }
+
+    /// The check when the pointer crosses to another display can run before the window has moved.
+    @objc private func backingChanged() {
+        syncPixelScale()
     }
 
     private func place(at mouse: NSPoint) {
@@ -219,7 +224,7 @@ final class Overlay: NSObject {
     private func setRate(lively: Bool) {
         guard lively != runningLively else { return }
         runningLively = lively
-        link?.preferredFrameRateRange = lively ? Overlay.livelyRate : Overlay.idleRate
+        clock?.isLively = lively
     }
 
     private func screenUnder(_ mouse: NSPoint) -> NSScreen? {
@@ -227,12 +232,12 @@ final class Overlay: NSObject {
             return currentScreen
         }
         currentScreen = NSScreen.screens.first { $0.frame.contains(mouse) } ?? NSScreen.main
+        clock?.follow(currentScreen)
         syncPixelScale()
         return currentScreen
     }
 
-    @objc private func tick(_ displayLink: CADisplayLink) {
-        let now = displayLink.timestamp
+    private func tick(now: CFTimeInterval) {
         let dt = lastTick == 0 ? 1.0 / 60 : now - lastTick
         lastTick = now
 

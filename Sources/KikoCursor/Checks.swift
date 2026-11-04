@@ -1,5 +1,4 @@
-import CoreGraphics
-import Foundation
+import AppKit
 import KikoCore
 
 /// Logic checks that drive the Rig with scripted input. Run with `KikoCursor --check`.
@@ -135,6 +134,7 @@ enum Checks {
             runSharedChecks(avatar)
         }
         runAvatarChecks()
+        runClockChecks()
 
         print(failures == 0 ? "all checks passed" : "\(failures) check(s) FAILED")
         return failures == 0
@@ -427,6 +427,35 @@ enum Checks {
             }
             expect(covered == 0, "and what a click throws out stays off it", "\(covered) of 40 frames")
         }
+    }
+
+    /// macOS 13's frame clock, which this runs whatever the system. It needs a display that's awake.
+    private static func runClockChecks() {
+        print("macOS 13's frame clock")
+        guard CGDisplayIsAsleep(CGMainDisplayID()) == 0 else {
+            print("  skipped: the display is asleep")
+            return
+        }
+        var frames: [CFTimeInterval] = []
+        let clock = makeFrameClock(for: NSView(), forceCoreVideo: true) { frames.append($0) }
+        func count(over seconds: Double) -> Int {
+            frames.removeAll()
+            RunLoop.main.run(until: Date().addingTimeInterval(seconds))
+            return frames.count
+        }
+        expect(count(over: 0.2) == 0, "no frames until it's started")
+        clock.isPaused = false
+        let idle = count(over: 1)
+        expect((15...35).contains(idle), "about 30 frames a second while idle", "\(idle)")
+        expect(zip(frames, frames.dropFirst()).allSatisfy { $0 < $1 }, "and always forwards")
+        clock.isLively = true
+        let lively = count(over: 1)
+        expect(lively >= 45, "at least 45 a second while lively", "\(lively)")
+        clock.isPaused = true
+        expect(count(over: 0.2) == 0, "none once paused, not even one on its way")
+        clock.isPaused = false
+        expect(count(over: 0.3) > 0, "and they start again")
+        clock.isPaused = true
     }
 
     /// What makes each character behave differently, and swapping between them.
