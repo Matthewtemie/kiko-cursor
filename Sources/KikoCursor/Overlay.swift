@@ -26,9 +26,13 @@ private final class Canvas {
     /// as drawing the character. Kiko's colours are sRGB values, so they still come out right.
     func resize(side: CGFloat, pixelScale: CGFloat, colorSpace: CGColorSpace) {
         pixels = Int(side * pixelScale)
-        ctx = CGContext(data: nil, width: pixels, height: pixels, bitsPerComponent: 8, bytesPerRow: 0,
-                        space: colorSpace,
-                        bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue)
+        func bitmap(_ space: CGColorSpace) -> CGContext? {
+            CGContext(data: nil, width: pixels, height: pixels, bitsPerComponent: 8, bytesPerRow: 0,
+                      space: space,
+                      bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue)
+        }
+        // Not every colour space can back this bitmap, and with no bitmap there's no pointer.
+        ctx = bitmap(colorSpace) ?? CGColorSpace(name: CGColorSpace.sRGB).flatMap(bitmap)
         layer.contentsScale = pixelScale
     }
 
@@ -281,7 +285,7 @@ final class Overlay: NSObject {
         // The window itself tracks the mouse at the full display rate. The drawing inside it
         // only needs to look alive, and the rate drops the longer Kiko has been still:
         // 60 fps moving, then 30, 10 and 7.5 (every 1st, 3rd and 4th tick of the 30 Hz idle
-        // rate). Measured at about 10.5%, 3% and 1-2.6% of one core.
+        // rate).
         let interval: Double
         if lively {
             interval = 1.0 / 62

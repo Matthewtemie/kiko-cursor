@@ -1,5 +1,6 @@
 #!/bin/zsh
-# Builds dist/KikoCursor.app: universal release binary, icon, Info.plist, ad-hoc signature.
+# Builds dist/KikoCursor.app: release binary, icon, Info.plist, ad-hoc signature. The binary is for
+# this kind of Mac, unless --universal makes one for Apple silicon and Intel, which needs newer tools.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -9,19 +10,27 @@ APP="$ROOT/dist/KikoCursor.app"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
-# One binary for Apple silicon and Intel.
-if ! swift build -c release --arch arm64 --arch x86_64 > "$WORK/build.log" 2>&1; then
+ARCHS=()
+if [[ "${1:-}" == "--universal" ]]; then
+  ARCHS=(--arch arm64 --arch x86_64)
+fi
+
+if ! swift build -c release "${ARCHS[@]}" > "$WORK/build.log" 2>&1; then
   tail -30 "$WORK/build.log" >&2
   echo "build failed" >&2
   exit 1
 fi
-BIN="$(swift build -c release --arch arm64 --arch x86_64 --show-bin-path)/KikoCursor"
-ARCHS="$(lipo -archs "$BIN")"
-[[ "$ARCHS" == *arm64* && "$ARCHS" == *x86_64* ]] || { echo "not a universal binary: $ARCHS" >&2; exit 1; }
+BIN="$(swift build -c release "${ARCHS[@]}" --show-bin-path)/KikoCursor"
+if (( ${#ARCHS} )); then
+  BUILT="$(lipo -archs "$BIN")"
+  [[ "$BUILT" == *arm64* && "$BUILT" == *x86_64* ]] || { echo "not a universal binary: $BUILT" >&2; exit 1; }
+fi
 
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/KikoCursor"
+# Without this the app carries the path of the folder it was built in.
+strip -S -x "$APP/Contents/MacOS/KikoCursor"
 
 "$BIN" --icon "$WORK/icon.png"
 mkdir "$WORK/AppIcon.iconset"

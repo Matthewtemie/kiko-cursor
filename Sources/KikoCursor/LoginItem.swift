@@ -1,8 +1,15 @@
+import Foundation
 import ServiceManagement
 
 /// Start at login, through macOS's own login items list, so it also shows up in
 /// System Settings > General > Login Items and can be turned off from there.
 enum LoginItem {
+    private struct NotInApplications: LocalizedError {
+        var errorDescription: String? {
+            "Drag Kiko Cursor to your Applications folder in Finder, open it from there, then switch this on."
+        }
+    }
+
     static var isOn: Bool {
         SMAppService.mainApp.status == .enabled
     }
@@ -14,6 +21,11 @@ enum LoginItem {
 
     static func set(_ on: Bool) throws {
         if on {
+            // macOS runs a downloaded app from a temporary folder until it's been moved, so a login
+            // item made from there would point at nothing after a restart.
+            if Bundle.main.bundlePath.contains("/AppTranslocation/") {
+                throw NotInApplications()
+            }
             try SMAppService.mainApp.register()
         } else {
             try SMAppService.mainApp.unregister()
