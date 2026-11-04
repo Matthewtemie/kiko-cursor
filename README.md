@@ -1,6 +1,8 @@
 # Kiko Cursor
 
-Turns your Mac's pointer into Kiko, an original chibi fox spirit who lives in your menu bar. Kiko's fingertip is the pointer: clicks land exactly where it points.
+Turns your Mac's pointer into an original chibi character who lives in your menu bar. Pick Kiko the fox spirit, Suzu the ninja or Marlo the pirate. The character's fingertip is the pointer: clicks land exactly where it points.
+
+![Kiko, Suzu and Marlo at rest, on a click, over a link and asleep, on light and dark](docs/avatars.png)
 
 ![Kiko's poses on light and dark, with a red cross marking the real mouse position](docs/poses.png)
 
@@ -14,14 +16,16 @@ That builds the app, moves it to `/Applications` and opens it. Run it again afte
 
 Needs macOS 14 or later and Swift (the Command Line Tools are enough). It asks for no permissions: no Accessibility, no Input Monitoring, no Screen Recording.
 
-- **Menu bar paw:** show or hide Kiko, change the size and options, start at login, quit.
+- **Menu bar paw:** show or hide the character, pick who it is under **Avatar**, change the size and options, start at login, quit. Your pick is remembered.
 - **⌃⌥K:** swap back to the normal pointer from anywhere.
 - **Quitting or crashing** brings the normal pointer straight back, because macOS ties the hidden state to the process.
-- **Start at Login** remembers where the app is. If you move the app out of `/Applications`, Kiko won't start at login. Opening the app from its new location and switching the option off and on should fix that, though this hasn't been tested.
+- **Start at Login** remembers where the app is. If you move the app out of `/Applications`, it won't start at login. Opening the app from its new location and switching the option off and on should fix that, though this hasn't been tested.
 
-## What Kiko does
+## What they do
 
-| When | Kiko |
+All three move and react the same way, and use the same pointing arm, so the click point can't differ between them.
+
+| When | The character |
 | --- | --- |
 | You move the mouse | Flies after the pointing hand, leaning, with scarf and tail trailing |
 | You click | Squashes, smiles and throws sparkles |
@@ -35,7 +39,17 @@ Needs macOS 14 or later and Swift (the Command Line Tools are enough). It asks f
 | You reach a screen edge | Moves to the other side of the pointer, to stay on screen |
 | macOS insists on the real pointer, as in Mission Control | Steps aside until macOS lets go, so there's only ever one pointer |
 
-Kiko is excluded from screen capture by default, like the normal pointer, with a menu option to include Kiko for demos. This exclusion hasn't been confirmed on macOS 26 yet, and some capture tools may ignore it.
+What sets each one apart:
+
+| | Kiko | Suzu | Marlo |
+| --- | --- | --- | --- |
+| **Look** | Fox ears and tail, red scarf | Teal hood, plum ponytail, small bell on a cord | Navy tricorn with a feather, brass-buttoned coat, parrot on the shoulder |
+| **Moves** | Flies after the pointer | Quick and tight | Bobs and rocks as if on waves |
+| **On a click** | Throws sparkles | Vanishes in a puff of smoke and throws paper shuriken; the arm stays, so you can still see where you're pointing | Scatters gold coins |
+| **Over a link** | Eyes sparkle, ears perk up | Eyes light up | Raises a spyglass, and the parrot hops up to the hat |
+| **Asleep** | Nods off, ears drooping | Hugs a scroll | Tips the hat over the eyes |
+
+The character is excluded from screen capture by default, like the normal pointer, with a menu option to include it for demos. This exclusion hasn't been confirmed on macOS 26 yet, and some capture tools may ignore it.
 
 ## How it works
 
@@ -43,14 +57,17 @@ macOS has no public way to replace the system cursor, so the app does three thin
 
 1. **Hides the real pointer** with `CGDisplayHideCursor`, plus the private `SetsCursorInBackground` connection property that makes it work while another app is frontmost. It's looked up at runtime: if a future macOS removes it, you get both pointers rather than a crash. Switching apps and reaching the menu bar bring the pointer back, so it's checked and re-hidden every frame.
 2. **Follows the mouse with a click-through window** at cursor level, with the hotspot at its exact centre.
-3. **Draws Kiko procedurally** with Core Graphics from spring physics, so there are no image assets and the art is sharp at any size.
+3. **Draws the character procedurally** with Core Graphics from spring physics, so there are no image assets and the art is sharp at any size.
 
-`NSCursor.currentSystem` still reports what the frontmost app wants while the pointer is hidden, which is what makes Kiko context-aware.
+`NSCursor.currentSystem` still reports what the frontmost app wants while the pointer is hidden, which is what makes the character context-aware.
 
 | Path | What's in it |
 | --- | --- |
 | `Sources/KikoCore/Rig.swift` | Mouse input to pose: physics, expressions, screen edges. No AppKit |
-| `Sources/KikoCore/Renderer.swift` | Pose to pixels: all of the character art |
+| `Sources/KikoCore/Avatar.swift` | Who's on screen, and the numbers that make each one move differently |
+| `Sources/KikoCore/KikoArt.swift`, `SuzuArt.swift`, `MarloArt.swift` | Pose to pixels: each character's art |
+| `Sources/KikoCore/DrawKit.swift` | What they share, including the pointing arm |
+| `Sources/KikoCore/Renderer.swift` | Picks the character's art for a pose and draws the real cursor when needed |
 | `Sources/KikoCursor/Overlay.swift` | The window, frame loop and drawing surface |
 | `Sources/KikoCursor/CursorHider.swift` | Hiding and restoring the real pointer |
 | `Sources/KikoCursor/SystemCursorWatcher.swift` | Working out which cursor the app wants |
@@ -62,19 +79,21 @@ macOS has no public way to replace the system cursor, so the app does three thin
 swift run KikoCursor --check
 ```
 
-Logic checks through the real physics: fingertip accuracy, every pose fits the window, screen edges, reactions, recovery from stalls.
+Checks through the real physics and drawing, for every character: fingertip accuracy, nothing hides the finger, all ink fits the window, screen edges, reactions, recovery from stalls, settling to the idle frame rate, swapping characters.
 
 ```bash
 swiftc -O scripts/livecheck.swift -o /tmp/livecheck -framework AppKit && pkill -x KikoCursor; /tmp/livecheck /Applications/KikoCursor.app/Contents/MacOS/KikoCursor
 ```
 
-Quits any running Kiko, then runs the app and checks from outside it, through the window system, that the pointer is hidden, the window tracks the mouse, toggling works, a returned pointer is re-hidden quickly, and a clean quit or `kill -9` restores the pointer. It moves your real mouse for a few seconds but never clicks.
+Quits any running Kiko, then runs the app and checks from outside it, through the window system, that the pointer is hidden, the window tracks the mouse, toggling works, a returned pointer is re-hidden quickly, and a clean quit or `kill -9` restores the pointer. It moves your real mouse for a few seconds but never clicks. It won't run with the screen locked or the display asleep, because no frames are drawn then.
 
 ```bash
-swift run KikoCursor --sheet sheet.png
+swift run KikoCursor --avatar suzu --sheet sheet.png
 ```
 
-Renders every pose through the real physics, on light and dark, with a red cross on the hotspot. Art changes are easiest to judge here.
+Renders every pose through the real physics, on light and dark, with a red cross on the hotspot. Art changes are easiest to judge here. Leave out `--avatar` for Kiko; `--lineup PATH` puts all three side by side.
+
+`--avatar NAME` also shows that character for one run without saving the choice. `--test-avatar-menu DIR` picks each character through the real menu, saves what's on screen to `DIR`, puts your saved choice back and quits.
 
 Other developer flags: `--portrait PATH`, `--bench`, `--exit-after SECONDS`, `--dump-frame PATH`, `--print-status`, `--test-unhide-every SECONDS`, `--login-item on|off|status` (from inside the `.app` only). Running `pkill -USR1 KikoCursor` does the same as ⌃⌥K.
 
@@ -82,8 +101,8 @@ Other developer flags: `--portrait PATH`, `--bench`, `--exit-after SECONDS`, `--
 
 - **Distribution:** the private API rules out the Mac App Store. Selling it means a notarized direct download, which needs an Apple Developer ID. The current build has only an ad-hoc signature, so on other Macs Gatekeeper will block it.
 - **Latency:** a window can't quite match the hardware cursor, so fast flicks may trail slightly. This hasn't been measured.
-- **Secure screens:** the app restores the normal pointer when the screen locks. Some system-level surfaces may not show Kiko.
+- **Secure screens:** the app restores the normal pointer when the screen locks. Some system-level surfaces may not show the character.
 - **Multiple displays:** the code handles them, but so far it has only run on a single built-in display.
 - **Crowded menu bars:** on a notched Mac, macOS can hide items that don't fit. If the paw is missing, ⌃⌥K still works, and `pkill KikoCursor` quits.
-- **Spaces swipes:** the window list reports windows sliding during a swipe. Whether Kiko visibly moves with it for that half second hasn't been checked by eye.
-- **Characters:** Kiko is original. Named anime characters are copyrighted, so shipping one needs a licence from the rights holder.
+- **Spaces swipes:** the window list reports windows sliding during a swipe. Whether the character visibly moves with it for that half second hasn't been checked by eye.
+- **Characters:** Kiko, Suzu and Marlo are all original. Named anime characters are copyrighted, so adding one, or something drawn to look like one, needs a licence from the rights holder.

@@ -1,10 +1,12 @@
 import AppKit
 import Carbon.HIToolbox
+import KikoCore
 import ServiceManagement
 
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private enum Key {
         static let enabled = "enabled"
+        static let avatar = "avatar"
         static let size = "size"
         static let fadeTyping = "fadeWhileTyping"
         static let hideFullscreen = "hideInFullscreen"
@@ -21,14 +23,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var loginMenuItem: NSMenuItem?
     private var locked = false
 
+    /// From --avatar: shows this character for one run without saving the choice.
+    var avatarForThisRun: Avatar?
+
+    /// What the settings held before the defaults went in, which is what a test walk puts back.
+    private var avatarAtLaunch: String?
+    private var walkingAvatarMenu = false
+
     private var enabled: Bool {
         get { defaults.bool(forKey: Key.enabled) }
         set { defaults.set(newValue, forKey: Key.enabled) }
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        avatarAtLaunch = defaults.string(forKey: Key.avatar)
         defaults.register(defaults: [
             Key.enabled: true,
+            Key.avatar: Avatar.kiko.rawValue,
             Key.size: "Medium",
             Key.fadeTyping: true,
             Key.hideFullscreen: true,
@@ -36,6 +47,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         ])
 
         overlay = Overlay()
+        overlay.avatar = avatarForThisRun ?? defaults.string(forKey: Key.avatar).flatMap(Avatar.init) ?? .kiko
         overlay.scale = Self.sizes.first { $0.name == defaults.string(forKey: Key.size) }?.scale ?? 0.85
         overlay.fadeWhileTyping = defaults.bool(forKey: Key.fadeTyping)
         overlay.hideInFullscreen = defaults.bool(forKey: Key.hideFullscreen)
@@ -48,10 +60,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         registerHotKey()
         registerToggleSignal()
         observeSystem()
+        // Opened while the screen is locked, no notification will ever say so.
+        locked = (CGSessionCopyCurrentDictionary() as? [String: Any])?["CGSSessionScreenIsLocked"] as? Bool ?? false
         refresh()
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        if walkingAvatarMenu { defaults.set(avatarAtLaunch, forKey: Key.avatar) }
         overlay.setActive(false)
     }
 
@@ -71,6 +86,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         overlay.hider.simulateSystemReset()
     }
 
+    /// Picks each avatar through the real menu items, printing what the menu then shows and
+    /// writing the frame on screen to a PNG. A test hook: it puts the saved choice back after.
+    func walkAvatarMenu(savingFramesTo dir: URL, then finish: @escaping () -> Void) {
+        walkingAvatarMenu = true
+        func step(_ index: Int) {
+            guard let submenu = statusItem.menu?.item(withTitle: "Avatar")?.submenu, index < submenu.numberOfItems else {
+                finish()
+                return
+            }
+            submenu.performActionForItem(at: index)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [self] in
+                let name = overlay.avatar.rawValue
+                dumpFrame(to: dir.appendingPathComponent("\(name).png"))
+                let ticked = statusItem.menu?.item(withTitle: "Avatar")?.submenu?.items.filter { $0.state == .on }.map(\.title) ?? []
+                let top = statusItem.menu?.items.first?.title ?? ""
+                print("avatar-menu \(name) ticked=\(ticked) top=\"\(top)\" saved=\(defaults.string(forKey: Key.avatar) ?? "nil")")
+                fflush(stdout)
+                step(index + 1)
+            }
+        }
+        step(0)
+    }
+
     @objc func toggle() {
         enabled.toggle()
         refresh()
@@ -82,11 +120,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func rebuildMenu() {
         let menu = NSMenu()
 
-        let show = NSMenuItem(title: "Show Kiko", action: #selector(toggle), keyEquivalent: "k")
+        let show = NSMenuItem(title: "Show \(overlay.avatar.name)", action: #selector(toggle), keyEquivalent: "k")
         show.keyEquivalentModifierMask = [.control, .option]
         show.target = self
         show.state = enabled ? .on : .off
         menu.addItem(show)
+
+        let avatarItem = NSMenuItem(title: "Avatar", action: nil, keyEquivalent: "")
+        let avatarMenu = NSMenu()
+        for avatar in Avatar.allCases {
+            let item = NSMenuItem(title: avatar.menuTitle, action: #selector(pickAvatar(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = avatar.rawValue
+            item.state = avatar == overlay.avatar ? .on : .off
+            avatarMenu.addItem(item)
+        }
+        avatarItem.submenu = avatarMenu
+        menu.addItem(avatarItem)
 
         let sizeItem = NSMenuItem(title: "Size", action: nil, keyEquivalent: "")
         let sizeMenu = NSMenu()
@@ -111,7 +161,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         if !overlay.hider.canHideInBackground {
             menu.addItem(.separator())
-            let note = NSMenuItem(title: "This macOS won't let Kiko hide the normal pointer", action: nil, keyEquivalent: "")
+            let note = NSMenuItem(title: "This macOS won't let \(overlay.avatar.name) hide the normal pointer", action: nil, keyEquivalent: "")
             note.isEnabled = false
             menu.addItem(note)
         }
@@ -136,6 +186,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         return item
     }
 
+    @objc private func pickAvatar(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String, let avatar = Avatar(rawValue: raw) else { return }
+        defaults.set(avatar.rawValue, forKey: Key.avatar)
+        overlay.avatar = avatar
+        rebuildMenu()
+    }
+
     @objc private func pickSize(_ sender: NSMenuItem) {
         defaults.set(sender.title, forKey: Key.size)
         overlay.scale = Self.sizes.first { $0.name == sender.title }?.scale ?? 0.85
@@ -148,7 +205,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         } catch {
             NSApp.activate(ignoringOtherApps: true)
             let alert = NSAlert()
-            alert.messageText = "Kiko couldn't change Start at Login"
+            alert.messageText = "Kiko Cursor couldn't change Start at Login"
             alert.informativeText = error.localizedDescription
             alert.runModal()
         }

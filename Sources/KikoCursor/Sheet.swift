@@ -23,17 +23,34 @@ enum Sheet {
         return pose
     }
 
-    private static func sweep(_ rig: Rig, from a: CGPoint, velocity v: CGPoint, seconds: Double) -> Pose {
+    private static func sweep(_ rig: Rig, from a: CGPoint, velocity v: CGPoint, seconds: Double, kind: CursorKind = .arrow) -> Pose {
         var pose = Pose()
         for i in 0..<Int(seconds / dt) {
             let t = Double(i) * dt
             let p = CGPoint(x: a.x + v.x * t, y: a.y + v.y * t)
-            pose = rig.step(RigInput(dt: dt, mouse: p, screen: screen))
+            pose = rig.step(RigInput(dt: dt, mouse: p, kind: kind, screen: screen))
         }
         return pose
     }
 
     private static let centre = CGPoint(x: 700, y: 480)
+
+    /// Moments only the newer characters have anything to show for.
+    private static let extraScenes: [Scene] = [
+        Scene(name: "after a click") { rig, _ in
+            _ = hold(rig, at: centre, seconds: 0.5)
+            _ = hold(rig, at: centre, seconds: 0.08, buttons: 1)
+            return hold(rig, at: centre, seconds: 0.2)
+        },
+        Scene(name: "text cursor, moving") { rig, _ in
+            _ = hold(rig, at: CGPoint(x: 200, y: 400), seconds: 0.5, kind: .other)
+            return sweep(rig, from: CGPoint(x: 200, y: 400), velocity: CGPoint(x: 900, y: 300), seconds: 0.3, kind: .other)
+        },
+    ]
+
+    private static func scenes(for avatar: Avatar) -> [Scene] {
+        avatar == .kiko ? scenes : scenes + extraScenes
+    }
 
     private static let scenes: [Scene] = [
         Scene(name: "rest") { rig, _ in hold(rig, at: centre, seconds: 1.0) },
@@ -85,7 +102,8 @@ enum Sheet {
         return CursorImage(image: ctx.makeImage()!, size: CGSize(width: 9, height: 16), hotSpot: CGPoint(x: 4.5, y: 8))
     }
 
-    static func render(to url: URL) {
+    static func render(to url: URL, avatar: Avatar = .kiko) {
+        let scenes = scenes(for: avatar)
         let columns = 6
         let cellW = 250, cellH = 250, rowsPerBg = Int(ceil(Double(scenes.count) / Double(columns)))
         let backgrounds: [CGColor] = [
@@ -102,7 +120,7 @@ enum Sheet {
         ctx.translateBy(x: 0, y: CGFloat(height))
         ctx.scaleBy(x: CGFloat(scale), y: -CGFloat(scale))
 
-        let poses = scenes.map { scene -> Pose in scene.run(Rig(), screen) }
+        let poses = scenes.map { scene -> Pose in scene.run(Rig(avatar: avatar), screen) }
 
         for (b, bg) in backgrounds.enumerated() {
             let top = CGFloat(b * rowsPerBg * cellH)
@@ -115,7 +133,7 @@ enum Sheet {
                 // Zoomed 1.6x so that details can be judged.
                 ctx.translateBy(x: x + CGFloat(cellW) / 2 - pose.body.x * 1.6, y: y + CGFloat(cellH) / 2 - (pose.body.y - 6) * 1.6)
                 ctx.scaleBy(x: 1.6, y: 1.6)
-                KikoRenderer.draw(pose, in: ctx, cursor: scenes[i].name == "text cursor" ? ibeam() : nil)
+                AvatarRenderer.draw(pose, in: ctx, cursor: scenes[i].name.hasPrefix("text cursor") ? ibeam() : nil)
                 // Red cross on the hotspot, so a finger that misses it is obvious.
                 ctx.setStrokeColor(CGColor(srgbRed: 1, green: 0, blue: 0.2, alpha: 0.9))
                 ctx.setLineWidth(0.4)
@@ -138,7 +156,7 @@ enum Sheet {
                 ctx.saveGState()
                 ctx.translateBy(x: CGFloat(half) * stripW / 2 + 60 + CGFloat(i) * 220, y: stripTop + 30)
                 ctx.scaleBy(x: s, y: s)
-                KikoRenderer.draw(poses[0], in: ctx)
+                AvatarRenderer.draw(poses[0], in: ctx)
                 ctx.restoreGState()
             }
         }
@@ -147,8 +165,8 @@ enum Sheet {
     }
 
     /// Close-ups of a few scenes, for judging line work.
-    static func portrait(to url: URL) {
-        let picks = ["rest", "click", "flying left"]
+    static func portrait(to url: URL, avatar: Avatar = .kiko) {
+        let picks = avatar == .kiko ? ["rest", "click", "flying left"] : ["rest", "click", "over a link", "asleep"]
         let zoom: CGFloat = 5
         let cell = 760
         let ctx = CGContext(data: nil, width: cell * picks.count, height: cell, bitsPerComponent: 8, bytesPerRow: 0,
@@ -160,37 +178,74 @@ enum Sheet {
         ctx.fill(CGRect(x: 0, y: 0, width: cell * picks.count, height: cell))
         for (i, name) in picks.enumerated() {
             guard let scene = scenes.first(where: { $0.name == name }) else { continue }
-            let pose = scene.run(Rig(), screen)
+            let pose = scene.run(Rig(avatar: avatar), screen)
             ctx.saveGState()
             ctx.clip(to: CGRect(x: i * cell, y: 0, width: cell, height: cell))
             ctx.translateBy(x: CGFloat(i * cell) + CGFloat(cell) / 2 - pose.body.x * zoom + 40,
                             y: CGFloat(cell) / 2 - (pose.body.y - 8) * zoom)
             ctx.scaleBy(x: zoom, y: zoom)
-            KikoRenderer.draw(pose, in: ctx)
+            AvatarRenderer.draw(pose, in: ctx)
             ctx.restoreGState()
         }
         write(ctx.makeImage()!, to: url)
     }
 
+    /// Everyone side by side: the same moments, on light and on dark.
+    static func lineup(to url: URL) {
+        let picks = ["rest", "click", "over a link", "asleep"]
+        let cellW = 230, cellH = 220, scale = 2
+        let backgrounds: [CGColor] = [
+            CGColor(srgbRed: 0.96, green: 0.96, blue: 0.97, alpha: 1),
+            CGColor(srgbRed: 0.11, green: 0.12, blue: 0.15, alpha: 1),
+        ]
+        let rows = Avatar.allCases.count
+        let width = cellW * picks.count * backgrounds.count * scale
+        let height = cellH * rows * scale
+        let ctx = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
+                            space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+        ctx.translateBy(x: 0, y: CGFloat(height))
+        ctx.scaleBy(x: CGFloat(scale), y: -CGFloat(scale))
+        for (b, bg) in backgrounds.enumerated() {
+            let left = CGFloat(b * picks.count * cellW)
+            ctx.setFillColor(bg)
+            ctx.fill(CGRect(x: left, y: 0, width: CGFloat(picks.count * cellW), height: CGFloat(height)))
+            for (r, avatar) in Avatar.allCases.enumerated() {
+                for (c, name) in picks.enumerated() {
+                    guard let scene = scenes.first(where: { $0.name == name }) else { continue }
+                    let pose = scene.run(Rig(avatar: avatar), screen)
+                    let x = left + CGFloat(c * cellW), y = CGFloat(r * cellH)
+                    ctx.saveGState()
+                    ctx.clip(to: CGRect(x: x, y: y, width: CGFloat(cellW), height: CGFloat(cellH)))
+                    ctx.translateBy(x: x + CGFloat(cellW) / 2 - pose.body.x * 1.55, y: y + CGFloat(cellH) / 2 - (pose.body.y - 8) * 1.55)
+                    ctx.scaleBy(x: 1.55, y: 1.55)
+                    AvatarRenderer.draw(pose, in: ctx)
+                    ctx.restoreGState()
+                }
+            }
+        }
+        write(ctx.makeImage()!, to: url)
+    }
+
     /// Times the drawing alone, into a bitmap the size of the live window's backing store.
-    static func bench() {
+    static func bench(avatar: Avatar = .kiko) {
         let side = 384
         let ctx = CGContext(data: nil, width: side, height: side, bitsPerComponent: 8, bytesPerRow: 0,
                             space: CGColorSpace(name: CGColorSpace.sRGB)!,
                             bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
         ctx.translateBy(x: CGFloat(side) / 2, y: CGFloat(side) / 2)
         ctx.scaleBy(x: 2 * 0.85, y: -2 * 0.85)
-        let pose = hold(Rig(), at: centre, seconds: 1)
+        let pose = hold(Rig(avatar: avatar), at: centre, seconds: 1)
         let frames = 2000
         let start = CFAbsoluteTimeGetCurrent()
         for _ in 0..<frames {
             ctx.saveGState()
             ctx.clear(CGRect(x: -200, y: -200, width: 400, height: 400))
-            KikoRenderer.draw(pose, in: ctx)
+            AvatarRenderer.draw(pose, in: ctx)
             ctx.restoreGState()
         }
         let ms = (CFAbsoluteTimeGetCurrent() - start) / Double(frames) * 1000
-        print(String(format: "draw: %.2f ms per frame, %.1f%% of a core at 30 fps, %.1f%% at 60 fps", ms, ms * 3, ms * 6))
+        print(String(format: "\(avatar.rawValue) draw: %.2f ms per frame, %.1f%% of a core at 30 fps, %.1f%% at 60 fps", ms, ms * 3, ms * 6))
     }
 
     /// The 1024px app icon: Kiko's head on a rounded tile.
@@ -220,7 +275,7 @@ enum Sheet {
         let zoom: CGFloat = 8.4
         ctx.translateBy(x: 524 - pose.body.x * zoom, y: 625 - pose.body.y * zoom)
         ctx.scaleBy(x: zoom, y: zoom)
-        KikoRenderer.draw(pose, in: ctx)
+        AvatarRenderer.draw(pose, in: ctx)
         ctx.restoreGState()
 
         write(ctx.makeImage()!, to: url)

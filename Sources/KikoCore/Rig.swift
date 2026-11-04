@@ -27,8 +27,14 @@ private struct Spring {
     var v: CGFloat = 0
 
     mutating func step(to target: CGFloat, omega: CGFloat, zeta: CGFloat, dt: CGFloat) {
-        v += (omega * omega * (target - x) - 2 * zeta * omega * v) * dt
-        x += v * dt
+        // A stiff spring overshoots further each time once a tick gets long, and then grows without
+        // limit. So a long tick is taken in steps no longer than a 60 Hz one.
+        let steps = max(1, Int((dt * 60 - 1e-9).rounded(.up)))
+        let h = dt / CGFloat(steps)
+        for _ in 0..<steps {
+            v += (omega * omega * (target - x) - 2 * zeta * omega * v) * h
+            x += v * h
+        }
     }
 }
 
@@ -37,8 +43,8 @@ private struct Chain {
     var prev: [CGPoint]
     let seg: CGFloat
 
-    init(at p: CGPoint, nodes: Int, seg: CGFloat) {
-        pts = (0..<nodes).map { CGPoint(x: p.x + CGFloat($0) * seg, y: p.y + CGFloat($0) * seg * 0.4) }
+    init(at p: CGPoint, nodes: Int, seg: CGFloat, side: CGFloat = 1) {
+        pts = (0..<nodes).map { CGPoint(x: p.x + side * CGFloat($0) * seg, y: p.y + CGFloat($0) * seg * 0.4) }
         prev = pts
         self.seg = seg
     }
@@ -100,9 +106,22 @@ private struct Particle {
 /// scripted input for the contact sheet and the checks.
 public final class Rig {
     /// The window must reach this far from the hotspot to contain any pose.
-    public static let halfExtent: CGFloat = 112
+    public static let halfExtent: CGFloat = 128
     public static let minBodyDistance: CGFloat = 24
     public static let maxBodyDistance: CGFloat = 62
+
+    /// Swaps the character in place. The body stays where it is, so nothing jumps.
+    public var avatar: Avatar {
+        didSet {
+            guard avatar != oldValue else { return }
+            motion = avatar.motion
+            sparkles.removeAll()
+            puffs.removeAll()
+            poofStart = -10
+            vanishAtClick = 0
+            buildChains()
+        }
+    }
 
     public private(set) var expression = Expression.neutral
     public private(set) var idleSeconds: Double = 0
@@ -127,12 +146,18 @@ public final class Rig {
     private var lookX = Spring(x: 0)
     private var lookY = Spring(x: 0)
     private var reach = Spring(x: 1)
+    private var hover = Spring(x: 0)
+    private var drowse = Spring(x: 0)
     private var opacity: CGFloat = 1
 
-    private var chainA = Chain(at: .zero, nodes: 7, seg: 5)
-    private var chainB = Chain(at: .zero, nodes: 6, seg: 4.2)
+    private var motion: Motion
+    private var chainA: Chain
+    private var chainB: Chain
     private var sparkles: [Particle] = []
+    private var puffs: [Particle] = []
     private var zees: [Particle] = []
+    private var poofStart: CGFloat = -10
+    private var vanishAtClick: CGFloat = 0
 
     private var legPhase: CGFloat = 0
     private var blinkClock: CGFloat = 2
@@ -148,8 +173,12 @@ public final class Rig {
     private var reversals: [CGFloat] = []
     private var rng: UInt64
 
-    public init(seed: UInt64 = 0x4B494B4F) {
+    public init(seed: UInt64 = 0x4B494B4F, avatar: Avatar = .kiko) {
         rng = seed
+        self.avatar = avatar
+        motion = avatar.motion
+        chainA = Chain(at: .zero, nodes: motion.chainA.nodes, seg: motion.chainA.seg)
+        chainB = Chain(at: .zero, nodes: motion.chainB.nodes, seg: motion.chainB.seg)
     }
 
     private func random() -> CGFloat {
@@ -165,7 +194,8 @@ public final class Rig {
     /// True while anything is visibly in motion, so the caller can draw at full rate.
     public var isLively: Bool {
         let moving = hypot(vel.x, vel.y) > 3 || hypot(bodyVel.x, bodyVel.y) > 3
-        return moving || abs(squash.v) > 0.05 || !sparkles.isEmpty || buttonHeld > 0 || abs(lean.v) > 0.02
+        let posing = abs(hover.v) > 0.05 || abs(drowse.v) > 0.05 || !puffs.isEmpty
+        return moving || posing || abs(squash.v) > 0.05 || !sparkles.isEmpty || buttonHeld > 0 || abs(lean.v) > 0.02 + motion.rollSize * motion.rollRate
     }
 
     public func step(_ input: RigInput) -> Pose {
@@ -194,7 +224,7 @@ public final class Rig {
         let sign: CGFloat = facing.x < 0 ? -1 : 1
 
         let sleeping = expression == .asleep
-        let leanTarget = clamp(vel.x * 0.00032, -0.34, 0.34)
+        let leanTarget = clamp(vel.x * 0.00032, -0.34, 0.34) + sin(time * motion.rollRate) * motion.rollSize
         lean.step(to: leanTarget, omega: 13, zeta: 0.42, dt: dt)
         let nod = sleeping ? 0.1 + 0.05 * sin(time * 1.2) : 0
         headTilt.step(to: lean.x * 0.55 + (sleeping ? nod : 0.04 * sin(time * 0.9)), omega: 10, zeta: 0.5, dt: dt)
@@ -214,14 +244,22 @@ public final class Rig {
 
         reach.step(to: input.kind == .other ? 0 : 1, omega: 18, zeta: 1, dt: dt)
         reach.x = clamp(reach.x, 0, 1)
+        hover.step(to: input.kind == .link && !sleeping ? 1 : 0, omega: 16, zeta: 0.6, dt: dt)
+        hover.x = clamp(hover.x, 0, 1.15)
+        drowse.step(to: sleeping ? 1 : 0, omega: 6, zeta: 1, dt: dt)
+        drowse.x = clamp(drowse.x, 0, 1)
 
         legPhase += min(speed, 2500) * dt * 0.024
         let legAmount = min(speed / 700, 1)
 
-        let neck = CGPoint(x: bodyPos.x + sign * 5.5, y: bodyPos.y + 0.5)
+        // Asleep is slow breathing instead of the bob. Drowse blends them, so there's no jump between.
+        let awakeBob = sin(time * motion.bobRate) * motion.bobSize
+        let bob = awakeBob + (sin(time * 1.2) * 0.9 - awakeBob) * drowse.x
         let breeze = sin(time * 1.7) * 55
-        chainA.step(anchor: neck, force: CGPoint(x: sign * 150 + breeze, y: 150), dt: dt)
-        chainB.step(anchor: CGPoint(x: neck.x - sign * 1.5, y: neck.y + 1), force: CGPoint(x: sign * 70 - breeze, y: 210), dt: dt)
+        chainA.step(anchor: anchor(motion.chainA, sign: sign, bob: bob),
+                    force: CGPoint(x: sign * motion.chainA.pull.x + breeze * motion.chainA.breeze, y: motion.chainA.pull.y), dt: dt)
+        chainB.step(anchor: anchor(motion.chainB, sign: sign, bob: bob),
+                    force: CGPoint(x: sign * motion.chainB.pull.x + breeze * motion.chainB.breeze, y: motion.chainB.pull.y), dt: dt)
         // Flutter travelling down the ribbon, stronger the faster Kiko is going.
         let flutter = 1.2 + min(speed / 450, 1) * 2.2
 
@@ -232,11 +270,12 @@ public final class Rig {
         opacity += (opacityTarget - opacity) * (1 - exp(-dt * (opacityTarget > opacity ? 26 : 7)))
 
         var pose = Pose()
+        pose.avatar = avatar
         pose.body = CGPoint(x: rel.x, y: rel.y)
         pose.facing = facing.x
         pose.lean = lean.x
         pose.squash = squash.x
-        pose.bob = sleeping ? sin(time * 1.2) * 0.9 : sin(time * 2.1) * 0.55
+        pose.bob = bob
         pose.headTilt = headTilt.x
         pose.turn = turn.x
         pose.look = CGPoint(x: lookX.x, y: lookY.x)
@@ -249,13 +288,22 @@ public final class Rig {
         pose.armSwing = sin(legPhase + 1.2) * legAmount
         pose.reach = reach.x
         pose.fingerTip = fingerTip(rel: rel, sign: sign)
-        pose.scarfA = fluttered(chainA.relative(to: mouse), amount: flutter, phase: 0)
-        pose.scarfB = fluttered(chainB.relative(to: mouse), amount: flutter * 0.8, phase: 2.1)
+        pose.scarfA = fluttered(chainA.relative(to: mouse), amount: flutter * motion.chainA.flutter, phase: motion.chainA.phase)
+        pose.scarfB = fluttered(chainB.relative(to: mouse), amount: flutter * motion.chainB.flutter, phase: motion.chainB.phase)
+        pose.hover = hover.x
+        pose.drowse = drowse.x
+        pose.vanish = vanish
         pose.sparkles = sparkles.map {
-            Sparkle(pos: CGPoint(x: $0.pos.x - mouse.x, y: $0.pos.y - mouse.y),
-                    size: $0.size * (1 - $0.age / $0.life * 0.6),
-                    rot: $0.spin * $0.age,
-                    alpha: 1 - pow($0.age / $0.life, 3))
+            let pos = CGPoint(x: $0.pos.x - mouse.x, y: $0.pos.y - mouse.y)
+            return Sparkle(pos: pos,
+                           size: $0.size * (1 - $0.age / $0.life * motion.burst.shrink),
+                           rot: $0.spin * $0.age,
+                           alpha: (1 - pow($0.age / $0.life, 3)) * edgeFade(pos, margin: 8))
+        }
+        pose.puffs = puffs.map {
+            let pos = CGPoint(x: $0.pos.x - mouse.x, y: $0.pos.y - mouse.y)
+            let radius = $0.size * (0.7 + 0.8 * sqrt($0.age / $0.life))
+            return Puff(pos: pos, radius: radius, alpha: (1 - pow($0.age / $0.life, 2)) * edgeFade(pos, margin: radius), turn: $0.spin)
         }
         pose.zees = zees.map {
             Zee(pos: CGPoint(x: $0.pos.x - mouse.x, y: $0.pos.y - mouse.y),
@@ -267,6 +315,41 @@ public final class Rig {
     }
 
     private var facingTarget: CGFloat = 1
+
+    /// A flick can leave what was thrown behind at the edge of the window, which would
+    /// cut it off in a straight line. So it fades out before it gets there.
+    private func edgeFade(_ pos: CGPoint, margin: CGFloat) -> CGFloat {
+        clamp((Rig.halfExtent - max(abs(pos.x), abs(pos.y)) - margin) / 10, 0, 1)
+    }
+
+    /// Gone within a moment of the click and back about a third of a second later.
+    private var vanish: CGFloat {
+        guard motion.poofs else { return 0 }
+        let t = time - poofStart
+        // From wherever she'd got to, so a double click doesn't bring her out for a frame.
+        if t < 0.05 { return vanishAtClick + (1 - vanishAtClick) * t / 0.05 }
+        if t < 0.16 { return 1 }
+        if t < 0.34 {
+            let back = (t - 0.16) / 0.18
+            return 1 - back * back * (3 - 2 * back)
+        }
+        return 0
+    }
+
+    private func anchor(_ spec: ChainSpec, sign: CGFloat, bob: CGFloat) -> CGPoint {
+        let x = sign * spec.anchor.x, y = spec.anchor.y
+        guard spec.followsBody else { return CGPoint(x: bodyPos.x + x, y: bodyPos.y + y) }
+        return CGPoint(x: bodyPos.x + x * cos(lean.x) - y * sin(lean.x),
+                       y: bodyPos.y + bob + x * sin(lean.x) + y * cos(lean.x))
+    }
+
+    private func buildChains() {
+        for (spec, isA) in [(motion.chainA, true), (motion.chainB, false)] {
+            let start = CGPoint(x: bodyPos.x + spec.anchor.x * sideX, y: bodyPos.y + spec.anchor.y - 0.5)
+            let chain = Chain(at: start, nodes: spec.nodes, seg: spec.seg, side: sideX)
+            if isA { chainA = chain } else { chainB = chain }
+        }
+    }
 
     private func fluttered(_ pts: [CGPoint], amount: CGFloat, phase: CGFloat) -> [CGPoint] {
         var out = pts
@@ -299,8 +382,7 @@ public final class Rig {
         bodyPos = CGPoint(x: mouse.x + rest.x, y: mouse.y + rest.y)
         facingTarget = sideX
         facing = Spring(x: sideX)
-        chainA = Chain(at: CGPoint(x: bodyPos.x + 5.5 * sideX, y: bodyPos.y), nodes: 7, seg: 5)
-        chainB = Chain(at: CGPoint(x: bodyPos.x + 4 * sideX, y: bodyPos.y + 1), nodes: 6, seg: 4.2)
+        buildChains()
     }
 
     private func updateSides(_ mouse: CGPoint, _ screen: CGRect) {
@@ -330,7 +412,7 @@ public final class Rig {
         let rest = restOffset(mouse, input.screen, kind: input.kind)
         let target = CGPoint(x: mouse.x + rest.x, y: mouse.y + rest.y)
 
-        let omega: CGFloat = 12.5, zeta: CGFloat = 0.68
+        let omega = motion.omega, zeta = motion.zeta
         bodyVel.x += (omega * omega * (target.x - bodyPos.x) - 2 * zeta * omega * bodyVel.x) * dt
         bodyVel.y += (omega * omega * (target.y - bodyPos.y) - 2 * zeta * omega * bodyVel.y) * dt
         bodyPos.x += bodyVel.x * dt
@@ -339,7 +421,7 @@ public final class Rig {
         // Kiko is on a leash: never so far that the arm snaps, never on top of the pointer.
         var rx = bodyPos.x - mouse.x, ry = bodyPos.y - mouse.y
         let d = max(hypot(rx, ry), 0.001)
-        let limit = input.kind == .other ? Rig.maxBodyDistance * 1.2 : Rig.maxBodyDistance
+        let limit = Rig.maxBodyDistance
         if d > limit || d < Rig.minBodyDistance {
             let wanted = d > limit ? limit : Rig.minBodyDistance
             rx *= wanted / d
@@ -363,6 +445,11 @@ public final class Rig {
             happyUntil = time + 0.55
             squash.v -= 3.2
             burst(at: input.mouse)
+            if motion.poofs {
+                vanishAtClick = vanish
+                poofStart = time
+                poof(at: CGPoint(x: bodyPos.x, y: bodyPos.y - 8))
+            }
         }
         if input.buttons != 0 { buttonHeld += CGFloat(input.dt) } else { buttonHeld = 0 }
         lastButtons = input.buttons
@@ -370,14 +457,31 @@ public final class Rig {
     }
 
     private func burst(at p: CGPoint) {
-        for i in 0..<6 {
-            let a = CGFloat(i) / 6 * .pi * 2 + random() * 0.7
-            let v = 70 + random() * 70
+        let b = motion.burst
+        for i in 0..<b.count {
+            let a = CGFloat(i) / CGFloat(b.count) * .pi * 2 + random() * 0.7
+            let v = pick(b.speed)
             sparkles.append(Particle(pos: p,
-                                     vel: CGPoint(x: cos(a) * v, y: sin(a) * v),
-                                     life: 0.34 + random() * 0.14,
-                                     size: 2.6 + random() * 2.6,
-                                     spin: (random() - 0.5) * 9))
+                                     vel: CGPoint(x: cos(a) * v, y: sin(a) * v - b.lift),
+                                     life: pick(b.life),
+                                     size: pick(b.size),
+                                     spin: (random() - 0.5) * b.spin))
+        }
+    }
+
+    private func pick(_ range: ClosedRange<CGFloat>) -> CGFloat {
+        range.lowerBound + random() * (range.upperBound - range.lowerBound)
+    }
+
+    private func poof(at p: CGPoint) {
+        for i in 0..<9 {
+            let a = CGFloat(i) / 9 * .pi * 2 + random() * 0.5
+            let out = i == 0 ? 0 : 12 + random() * 12
+            puffs.append(Particle(pos: CGPoint(x: p.x + cos(a) * out, y: p.y + sin(a) * out * 1.25),
+                                  vel: CGPoint(x: cos(a) * 26, y: sin(a) * 26 - 8),
+                                  life: 0.36 + random() * 0.2,
+                                  size: 9 + random() * 6,
+                                  spin: a))
         }
     }
 
@@ -461,11 +565,21 @@ public final class Rig {
         for i in sparkles.indices {
             sparkles[i].pos.x += sparkles[i].vel.x * dt
             sparkles[i].pos.y += sparkles[i].vel.y * dt
-            sparkles[i].vel.x *= pow(0.02, dt)
-            sparkles[i].vel.y *= pow(0.02, dt)
+            sparkles[i].vel.x *= pow(motion.burst.drag, dt)
+            sparkles[i].vel.y *= pow(motion.burst.drag, dt)
+            sparkles[i].vel.y += motion.burst.gravity * dt
             sparkles[i].age += dt
         }
         sparkles.removeAll { $0.age >= $0.life }
+
+        for i in puffs.indices {
+            puffs[i].pos.x += puffs[i].vel.x * dt
+            puffs[i].pos.y += puffs[i].vel.y * dt
+            puffs[i].vel.x *= pow(0.05, dt)
+            puffs[i].vel.y *= pow(0.05, dt)
+            puffs[i].age += dt
+        }
+        puffs.removeAll { $0.age >= $0.life }
 
         if expression == .asleep {
             nextZee -= dt

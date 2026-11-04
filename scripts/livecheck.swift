@@ -51,6 +51,14 @@ func menuBarItems() -> [CGRect] {
     }
 }
 
+// With the screen locked or the display asleep no frames are drawn, so most of this would fail
+// for a reason that has nothing to do with the app.
+let session = CGSessionCopyCurrentDictionary() as? [String: Any] ?? [:]
+if session["CGSSessionScreenIsLocked"] as? Bool == true || CGDisplayIsAsleep(CGMainDisplayID()) != 0 {
+    print("not run: the screen is locked or the display is asleep")
+    exit(2)
+}
+
 let start = mouse()
 let bounds = NSScreen.main!.frame
 print("displays: \(NSScreen.screens.map { "\($0.frame) scale \($0.backingScaleFactor)" })")

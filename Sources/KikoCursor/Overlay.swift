@@ -44,7 +44,7 @@ private final class Canvas {
                         size: CGSize(width: $0.size.width / scale, height: $0.size.height / scale),
                         hotSpot: CGPoint(x: $0.hotSpot.x / scale, y: $0.hotSpot.y / scale))
         }
-        KikoRenderer.draw(pose, in: ctx, cursor: native)
+        AvatarRenderer.draw(pose, in: ctx, cursor: native)
         ctx.restoreGState()
         lastImage = ctx.makeImage()
         layer.contents = lastImage
@@ -77,6 +77,16 @@ final class Overlay: NSObject {
     private var lastOrigin = NSPoint(x: CGFloat.nan, y: CGFloat.nan)
     private var currentScreen: NSScreen?
     private var active = false
+
+    var avatar: Avatar {
+        get { rig.avatar }
+        set {
+            rig.avatar = newValue
+            lastDraw = 0
+            // Switched off, nothing redraws, and the last character would flash up when it comes back.
+            if !active { canvas.layer.contents = nil }
+        }
+    }
 
     var fadeWhileTyping = true
     var hideInFullscreen = true
